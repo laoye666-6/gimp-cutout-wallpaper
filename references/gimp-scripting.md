@@ -33,7 +33,7 @@ gimp-console-3.2.exe -n -i --batch-interpreter=python-fu-eval \
 | 剪切 | `(gimp-edit-cut drawable)`（3.0 参数是 drawables 列表，单个也可） |
 | 图层蒙版 | `(gimp-layer-create-mask layer ADD-MASK-WHITE)` → `(gimp-layer-add-mask layer mask)` |
 | 选区转蒙版内容 | 选中状态下对蒙版执行 `(gimp-edit-fill mask FILL-WHITE)` 前先 `(gimp-image-select-item image CHANNEL-OP-REPLACE mask)` 反向操作；常用做法：把灰度蒙版 PNG 作为图层载入 → 全选复制 → 粘贴进 mask |
-| 导出 PNG | `(file-png-export RUN-NONINTERACTIVE image "out.png" #f 0 9 1 1 1 1 1 0 #f #f #f #f #f #f "")`（3.0 由 file-png-save 改名，第4参 options 传 #f） |
+| 导出 PNG | `(gimp-file-save RUN-NONINTERACTIVE image "out.png" #f)`（**推荐**；`file-png-export` 参数类型苛刻易翻车） |
 | 选中图层 | `(gimp-image-set-selected-layers image (list layer))` |
 | 合并/压平 | `(gimp-image-merge-visible-layers image CLIP-TO-IMAGE)` / `(gimp-image-flatten image)` |
 | Script-Fu 输出 | 3.2 无 `print`，用 `(display x)` `(newline)`；`(gimp-message "...")` 走消息通道 |
@@ -58,34 +58,41 @@ cv2.imwrite("mask_hair.png", mask)
 ```
 **每一轮蒙版都要导出可视化小图（把 mask 叠在原图上）用 Read 目检**，调阈值直到干净。
 
-### B. GIMP 内应用蒙版 → 拆层导出（script-fu 骨架）
+### B. GIMP 内应用蒙版 → 拆层导出（script-fu 骨架，**实战调试通过的版本**）
+
+**关键坑（全部实测踩过）**：
+1. **蒙版 PNG 必须转成"白色 + alpha=灰度值"的 RGBA**——`gimp-image-select-item` 按**图层 alpha** 选区，灰度 JPEG/PNG 无 alpha 时选区=全图！
+   ```python
+   rgba = np.zeros((*m.shape, 4), np.uint8); rgba[:,:,:3] = 255; rgba[:,:,3] = m
+   cv2.imwrite("sel_mask.png", rgba)
+   ```
+2. **源层要先 `(gimp-layer-add-alpha base)`**，否则 JPG 源复制出的新图无 alpha（透明区变白底）。
+3. GIMP 3 的 PDB 数组参数要 **vector**：`(gimp-image-set-selected-layers image (vector base))`、`(gimp-edit-copy (vector base))`；而 `gimp-image-get-selected-layers` 返回嵌套 vector，取第一层用 `(vector-ref (car (gimp-image-get-selected-layers image)) 0)`。
+4. `(gimp-edit-paste-as-new-image)` 返回裁剪到选区 bbox 的新图像（自带 alpha，前提见坑 2）。
 
 ```scheme
-(let* ((image (car (gimp-file-load RUN-NONINTERACTIVE "C:/in.jpg")))
-       (bg (car (gimp-image-get-selected-layers image)))   ; 底层
-       (w (car (gimp-image-get-width image)))              ; 3.0 是 get-width（2.10 是 width）
-       (h (car (gimp-image-get-height image))))
-  ;; 1) 以"头发层"为例：新建透明层放最上
-  (let* ((hair (car (gimp-layer-new image "hair" w h RGBA-IMAGE 100 LAYER-MODE-NORMAL))))
-    (gimp-image-insert-layer image hair -1? -1)  ; parent 用 0/-1 视版本，实测填 0 顶层
-    (gimp-image-set-selected-layers image (list hair))
-    ;; 2) 载入灰度蒙版 PNG 成图层，选择其不透明区域
-    (let* ((mimg (car (gimp-file-load RUN-NONINTERACTIVE "C:/mask_hair.png")))
-           (mlayer (car (gimp-image-get-selected-layers mimg))))
-      (gimp-image-select-item image CHANNEL-OP-REPLACE mlayer)
-      ;; 3) 复制原图对应区域到 hair 层：激活原图层 copy，再 paste 到 hair
-      (gimp-image-set-selected-layers image (list bg))
-      (gimp-edit-copy (list bg))
-      (let ((float (car (gimp-edit-paste hair TRUE))))
-        (gimp-floating-sel-anchor float)))
-    ;; 4) 羽化边缘更自然：重做选区时先 feather
-    ;; 5) 导出
-    (file-png-export RUN-NONINTERACTIVE image "C:/out_hair.png" #f 0 9 1 1 1 1 1 0 #f #f #f #f #f #f "")))
-(gimp-quit 0)
+(define (cut-layer src maskpath outpath)
+  (let* ((image (car (gimp-file-load RUN-NONINTERACTIVE src)))
+         (base (vector-ref (car (gimp-image-get-selected-layers image)) 0))
+         (mlayer (car (gimp-file-load-layer RUN-NONINTERACTIVE image maskpath))))
+    (gimp-layer-add-alpha base)
+    (gimp-image-insert-layer image mlayer 0 -1)
+    (gimp-context-set-feather TRUE)
+    (gimp-context-set-feather-radius 2 2)          ; 选区羽化=边缘软化
+    (gimp-image-select-item image CHANNEL-OP-REPLACE mlayer)
+    (gimp-image-set-selected-layers image (vector base))
+    (gimp-edit-copy (vector base))
+    (let ((newimg (car (gimp-edit-paste-as-new-image))))
+      (gimp-file-save RUN-NONINTERACTIVE newimg outpath #f)
+      (gimp-image-delete newimg))
+    (gimp-selection-none image)
+    (gimp-image-remove-layer image mlayer)
+    (gimp-image-delete image)
+    (display (string-append "cut " outpath)) (newline)))
+;; 多层循环调用后 (gimp-quit 0)
 ```
-
-> 注意：`gimp-edit-copy` 复制的是**选区内**的激活图层像素；粘贴目标决定归属。粘贴产生 floating selection，anchor 到目标层。
-> 导出整图前用 `(gimp-image-set-selected-layers ...)` 只留目标层可见 + `file-png-export` 的 `save-transparent`；更稳的做法是每层单独 new image（复制选区→粘贴到新 image→flatten 到 alpha）导出。
+> 蒙版如有杂散小像素（<1000px 连通域），先在 Python 里清掉，否则 paste-as-new-image 的 bbox 会被撑到全画布。
+> 段间接缝：GIMP 导出后用 Python 对各段 alpha 做重叠带线性渐变（如段1在 y300→332 渐隐、段2在 y298→330 渐显），静态合成无缝。
 
 ### C. GIMP GUI 交互抠图（指导用户手动用）
 

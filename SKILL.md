@@ -41,7 +41,7 @@ python -c "import cv2, numpy, PIL"   # 辅助抠图库
 
 ## 第三步：组装 scene.json（→ [references/scene-format.md](references/scene-format.md)）
 
-scene.json 可手写。坐标体系：`orthogonalprojection` 定义世界像素尺寸，origin 在中心。图层 = models/*.json(→materials/*.json→图片) 三层嵌套；**骨骼式动画不用 Puppet Warp 也能做**：
+scene.json 可手写（**本 skill 全流程实测跑通**）。坐标体系：`orthogonalprojection` 定义世界像素尺寸；**origin=图层中心，x 同屏幕像素，y 需翻转（world_y = H - 屏幕y）**——可用纯色标记块对照实验校准。图层 = models/*.json(→materials/*.json→图片) 三层嵌套；**骨骼式动画不用 Puppet Warp 也能做**：
 
 - **摆动**：摆动层挂 `effects/foliagesway/effect.json`（内置风场效果，cornerweights 底锚顶摆 = 蒙皮权重思想），每段 `constantshadervalues` 里调 Speed/Strength/Phase/Power。
 - **骨骼链**：每段一个对象，origin 设在"关节"，用 SceneScript 按相位差旋转（FK 链）。swing/foliagesway 二选一或叠加。
