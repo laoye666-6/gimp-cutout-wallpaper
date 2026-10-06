@@ -17,6 +17,10 @@ description: 用 GIMP 抠图拆层 + Wallpaper Engine 场景/骨骼动画制作�
 
 ## 第一步：环境探测
 
+> **若本会话可用 `mcp__gimp__execute_script_fu` 工具（本机已配置 GIMP MCP），优先用 MCP**
+> 而不是命令行批处理：免启动等待、持久连接、错误自动转换。注意 TinyScheme 没有
+> string-join 等过程，调用不存在的过程名会让服务器挂 2 分钟。
+
 ```bash
 # GIMP（3.x 与 2.10 的 API 不同，见 references/gimp-scripting.md）
 ls "D:/Program/GIMP/bin/gimp-console-3.2.exe"   # 或注册表 HKLM\...\Uninstall\GIMP-* 查 InstallLocation
